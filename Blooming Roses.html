@@ -1,0 +1,412 @@
+<!doctype html><html><head><meta charset=utf8><meta name=viewport content="width=device-width,initial-scale=1,viewport-fit=cover"><style>:root{color-scheme:light;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}html{scroll-padding-top:env(safe-area-inset-top,0px)}body{margin:0;padding:0;font:14px -apple-system,BlinkMacSystemFont,sans-serif;background:#fff;color:#000}img{max-width:100%}[hidden]:not([hidden=until-found i]){display:none!important}</style></head><body>
+<title>Blooming Roses</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Great+Vibes&family=Jost:wght@400;500&display=swap">
+<style>
+  /* Layout: one full-screen night stage. Roses are drawn on a canvas, grown from the bottom
+     edge into a bouquet. The message sits above them and is written in left to right. */
+  :root {
+    --ink: #0d0408;        /* near-black with a wine bias */
+    --wine: #3a0e1c;       /* glow behind the bouquet */
+    --blush: #ffe1e5;      /* message colour */
+    --rose: #e0233f;       /* glow and button accent */
+    --font-script: "Great Vibes", "Snell Roundhand", "Apple Chancery", "Brush Script MT", cursive;
+    --font-ui: "Jost", system-ui, -apple-system, "Segoe UI", sans-serif;
+    color-scheme: dark;
+  }
+
+  html, body { height: 100%; }
+  body {
+    margin: 0;
+    background: var(--ink);
+    color: var(--blush);
+    font-family: var(--font-ui);
+    overflow: hidden;
+  }
+
+  .stage {
+    position: relative;
+    height: 100%;
+    overflow: hidden;
+    background:
+      radial-gradient(ellipse 70% 55% at 50% 58%, var(--wine) 0%, rgba(58, 14, 28, 0) 70%),
+      radial-gradient(ellipse at 50% 50%, #1b0912 0%, var(--ink) 80%);
+  }
+
+  canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+
+  .top {
+    position: absolute;
+    inset: 0 0 auto 0;
+    padding-block: 5vh 0;
+    padding-left: max(16px, env(safe-area-inset-left, 0px));
+    padding-right: max(16px, env(safe-area-inset-right, 0px));
+    text-align: center;
+    pointer-events: none;
+  }
+
+  .love {
+    margin: 0;
+    font-family: var(--font-script);
+    font-weight: 400;
+    font-size: clamp(3.4rem, 13vw, 9rem);
+    line-height: 1.15;
+    color: var(--blush);
+    text-shadow: 0 0 28px rgba(224, 35, 63, 0.6), 0 0 6px rgba(224, 35, 63, 0.35);
+    text-wrap: balance;
+  }
+
+  /* Each word is revealed by a soft-edged mask that sweeps left to right, like ink being written. */
+  @property --reveal { syntax: "<percentage>"; inherits: false; initial-value: 0%; }
+  .word {
+    display: inline-block;
+    white-space: nowrap;
+    padding: 0.15em 0.25em;
+    margin: 0 -0.15em;
+    -webkit-mask-image: linear-gradient(90deg, #000 calc(var(--reveal) - 16%), transparent var(--reveal));
+    mask-image: linear-gradient(90deg, #000 calc(var(--reveal) - 16%), transparent var(--reveal));
+  }
+  .love.show .word {
+    animation: write var(--dur) cubic-bezier(0.4, 0.1, 0.3, 1) var(--delay) both;
+  }
+  @keyframes write {
+    from { --reveal: 0%; }
+    to   { --reveal: 116%; }
+  }
+
+  .replay {
+    position: absolute;
+    bottom: 16px;
+    right: max(16px, env(safe-area-inset-right, 0px));
+    font: 500 0.78rem/1 var(--font-ui);
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: var(--blush);
+    background: rgba(13, 4, 8, 0.7);
+    border: 1px solid rgba(255, 225, 229, 0.35);
+    border-radius: 999px;
+    padding: 0.85em 1.4em;
+    cursor: pointer;
+    transition: background 0.2s, border-color 0.2s;
+  }
+  .replay:hover { background: rgba(224, 35, 63, 0.25); border-color: var(--rose); }
+  .replay:focus-visible { outline: 2px solid var(--blush); outline-offset: 3px; }
+
+  @media (prefers-reduced-motion: reduce) {
+    .word, .love.show .word { -webkit-mask-image: none; mask-image: none; animation: none; }
+    .replay { display: none; }
+  }
+</style>
+
+<div class="stage">
+  <canvas id="c" aria-hidden="true"></canvas>
+  <div class="top">
+    <h1 class="love" id="love" aria-label="I Love You, L !🤍"><span id="words" aria-hidden="true"></span></h1>
+  </div>
+  <button class="replay" id="replay" type="button">Replay</button>
+</div>
+
+<script>
+(function () {
+  var TAU = Math.PI * 2;
+  var cv = document.getElementById('c');
+  var ctx = cv.getContext('2d');
+  var love = document.getElementById('love');
+  var wordsEl = document.getElementById('words');
+  var reduce = window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches;
+  var W = 0, H = 0;
+
+  function clamp(v, a, b) { return Math.min(b === undefined ? 1 : b, Math.max(a === undefined ? 0 : a, v)); }
+  function smooth(p) { p = clamp(p); return p * p * (3 - 2 * p); }
+
+  /* ---------- message ---------- */
+  var MESSAGE = 'I Love You, L !🤍';
+  var WRITE_START = 2600;   // ms after load
+  (function buildText() {
+    var parts = MESSAGE.split(' ');
+    var delay = WRITE_START;
+    parts.forEach(function (w, i) {
+      var s = document.createElement('span');
+      s.className = 'word';
+      s.textContent = w;
+      var dur = 420 + Array.from(w).length * 190;
+      s.style.setProperty('--delay', delay + 'ms');
+      s.style.setProperty('--dur', dur + 'ms');
+      delay += dur + 120;
+      wordsEl.appendChild(s);
+      if (i < parts.length - 1) wordsEl.appendChild(document.createTextNode(' '));
+    });
+  })();
+  function playText() {
+    love.classList.remove('show');
+    void love.offsetWidth;
+    love.classList.add('show');
+  }
+
+  /* ---------- bouquet layout ---------- */
+  // fx, fy: where the head ends up (fraction of the stage); fr: size; delay: ms before it starts growing
+  var roses = [
+    { fx: 0.13, fy: 0.76, fr: 0.46, delay: 1500, curve: -1.2, seed: 1.3 },
+    { fx: 0.87, fy: 0.74, fr: 0.50, delay: 1800, curve:  1.2, seed: 4.1 },
+    { fx: 0.28, fy: 0.62, fr: 0.72, delay: 600,  curve: -0.9, seed: 2.2 },
+    { fx: 0.72, fy: 0.60, fr: 0.76, delay: 900,  curve:  0.9, seed: 5.5 },
+    { fx: 0.50, fy: 0.50, fr: 1.00, delay: 0,    curve:  0.15, seed: 0.4 }
+  ];
+  var LEAVES = [
+    { u: 0.30, side: -1, sz: 0.62 },
+    { u: 0.48, side:  1, sz: 0.56 },
+    { u: 0.66, side: -1, sz: 0.44 }
+  ];
+  var STEM_MS = 1800, BLOOM_DELAY = 1500, BLOOM_MS = 3400;
+
+  function geom(r) {
+    var base = Math.min(W * 0.2, H * 0.17);
+    var x1 = W * r.fx, y1 = H * r.fy;
+    var x0 = W * 0.5 + (x1 - W * 0.5) * 0.22, y0 = H + 10;
+    return {
+      R: base * r.fr, x0: x0, y0: y0, x1: x1, y1: y1,
+      cx: (x0 + x1) / 2 + r.curve * Math.min(W, H) * 0.07,
+      cy: y0 - (y0 - y1) * 0.55
+    };
+  }
+  function pt(g, u) {
+    var k = 1 - u;
+    return [k * k * g.x0 + 2 * k * u * g.cx + u * u * g.x1,
+            k * k * g.y0 + 2 * k * u * g.cy + u * u * g.y1];
+  }
+  function tan(g, u) {
+    var k = 1 - u;
+    return [2 * k * (g.cx - g.x0) + 2 * u * (g.x1 - g.cx),
+            2 * k * (g.cy - g.y0) + 2 * u * (g.y1 - g.cy)];
+  }
+
+  /* ---------- drawing ---------- */
+  function drawStem(g, s) {
+    if (s <= 0) return;
+    ctx.save();
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    ctx.strokeStyle = '#27663b';
+    ctx.lineWidth = Math.max(2.2, g.R * 0.08);
+    ctx.beginPath();
+    var n = 40;
+    for (var i = 0; i <= n; i++) {
+      var p = pt(g, s * i / n);
+      if (i) ctx.lineTo(p[0], p[1]); else ctx.moveTo(p[0], p[1]);
+    }
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  function drawLeaves(g, s) {
+    LEAVES.forEach(function (lf) {
+      var lp = smooth((s - lf.u) / 0.2);
+      if (lp <= 0) return;
+      var p = pt(g, lf.u), tg = tan(g, lf.u);
+      var lean = Math.atan2(tg[0], -tg[1]);
+      var len = g.R * 0.95 * lf.sz * lp;
+      var w = len * 0.36;
+      ctx.save();
+      ctx.translate(p[0], p[1]);
+      ctx.rotate(lean + lf.side * 1.05);
+      var gr = ctx.createLinearGradient(0, 0, 0, -len);
+      gr.addColorStop(0, '#1b5233');
+      gr.addColorStop(1, '#3f9c58');
+      ctx.fillStyle = gr;
+      ctx.beginPath();
+      ctx.moveTo(0, 0);
+      ctx.quadraticCurveTo(w, -len * 0.5, 0, -len);
+      ctx.quadraticCurveTo(-w, -len * 0.5, 0, 0);
+      ctx.fill();
+      ctx.strokeStyle = 'rgba(200, 255, 215, 0.22)';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(0, 0);
+      ctx.lineTo(0, -len * 0.88);
+      ctx.stroke();
+      ctx.restore();
+    });
+  }
+
+  var LAYERS = 7;
+  var COUNTS = [3, 4, 4, 5, 5, 6, 6];   // petals per layer, innermost first
+
+  function petalPath(len, w) {
+    ctx.beginPath();
+    ctx.moveTo(0, 0);
+    ctx.bezierCurveTo(-w, -len * 0.15, -w * 1.05, -len * 0.8, -w * 0.32, -len * 0.99);
+    ctx.quadraticCurveTo(0, -len * 1.06, w * 0.32, -len * 0.99);
+    ctx.bezierCurveTo(w * 1.05, -len * 0.8, w, -len * 0.15, 0, 0);
+    ctx.closePath();
+  }
+
+  function drawHead(x, y, R, p, t, seed, tilt) {
+    var Rt = R * (0.62 + 0.38 * p);
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.rotate(tilt + Math.sin(t * 0.0011 + seed) * 0.025);
+    ctx.scale(1, 0.94);
+
+    // sepals peeking out under the petals
+    var open = 0.7 + 0.3 * p;
+    for (var k = 0; k < 5; k++) {
+      var a = Math.PI / 2 + (k - 2) * 0.62;
+      var sl = Rt * (1.02 + 0.08 * p) * open;
+      ctx.save();
+      ctx.rotate(a + Math.PI / 2);
+      ctx.fillStyle = '#256a3a';
+      ctx.beginPath();
+      ctx.moveTo(0, 0);
+      ctx.quadraticCurveTo(sl * 0.2, -sl * 0.5, 0, -sl);
+      ctx.quadraticCurveTo(-sl * 0.2, -sl * 0.5, 0, 0);
+      ctx.fill();
+      ctx.restore();
+    }
+
+    // petals, outer layer first so inner layers sit on top
+    for (var l = LAYERS - 1; l >= 0; l--) {
+      var frac = l / (LAYERS - 1);
+      var delay = (LAYERS - 1 - l) * 0.065;
+      var lp = smooth((p - delay) / 0.55);
+      var r = Rt * (0.24 + 0.76 * frac) * (0.5 + 0.5 * lp);
+
+      if (l < LAYERS - 1) {            // soft shadow cast on the layer below
+        var sg = ctx.createRadialGradient(0, 0, 0, 0, 0, r * 1.05);
+        sg.addColorStop(0, 'rgba(20, 0, 6, 0.42)');
+        sg.addColorStop(1, 'rgba(20, 0, 6, 0)');
+        ctx.fillStyle = sg;
+        ctx.beginPath();
+        ctx.arc(0, 0, r * 1.05, 0, TAU);
+        ctx.fill();
+      }
+
+      var n = COUNTS[l];
+      var base = l * 1.15 + p * 0.5 + seed;
+      var light = 16 + l * 5;
+      var w = r * (0.46 + 0.2 * frac) * (0.75 + 0.25 * lp);
+      for (var i = 0; i < n; i++) {
+        var ang = base + i * TAU / n;
+        ctx.save();
+        ctx.rotate(ang + Math.PI / 2);
+        ctx.translate(0, -r * 0.1);
+        var gr = ctx.createLinearGradient(0, 0, 0, -r);
+        gr.addColorStop(0, 'hsl(350, 85%, ' + (light - 8) + '%)');
+        gr.addColorStop(0.6, 'hsl(352, 82%, ' + light + '%)');
+        gr.addColorStop(1, 'hsl(355, 78%, ' + (light + 11) + '%)');
+        ctx.fillStyle = gr;
+        petalPath(r, w);
+        ctx.fill();
+        ctx.strokeStyle = 'rgba(40, 0, 12, 0.35)';
+        ctx.lineWidth = 0.8;
+        ctx.stroke();
+        ctx.restore();
+      }
+    }
+
+    // heart of the rose
+    var c = Rt * 0.14;
+    ctx.fillStyle = '#4a0412';
+    ctx.beginPath();
+    ctx.arc(0, 0, c, 0, TAU);
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(255, 120, 130, 0.35)';
+    ctx.lineWidth = 1.2;
+    ctx.beginPath();
+    ctx.arc(0, 0, c * 0.62, 0.3, 4.2);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.arc(c * 0.2, 0, c * 0.3, 2.4, 5.6);
+    ctx.stroke();
+
+    ctx.restore();
+  }
+
+  /* ---------- falling petals ---------- */
+  var FALL_START = 4800;
+  var fall = [];
+  function initFall() {
+    fall.length = 0;
+    for (var i = 0; i < 26; i++) {
+      fall.push({
+        x: Math.random(), y: -Math.random() * 0.9,
+        vy: 0.03 + Math.random() * 0.05,
+        sw: 0.02 + Math.random() * 0.04,
+        ph: Math.random() * TAU, rot: Math.random() * TAU,
+        vr: (Math.random() - 0.5) * 2.2,
+        sz: 5 + Math.random() * 7, l: 34 + Math.random() * 16
+      });
+    }
+  }
+  function drawFall(t, dt) {
+    ctx.save();
+    ctx.globalAlpha = smooth((t - FALL_START) / 2000);
+    fall.forEach(function (f) {
+      f.y += f.vy * dt;
+      f.rot += f.vr * dt;
+      if (f.y > 1.05) { f.y = -0.05; f.x = Math.random(); }
+      var px = (f.x + Math.sin(t * 0.0007 + f.ph) * f.sw) * W;
+      var py = f.y * H;
+      ctx.save();
+      ctx.translate(px, py);
+      ctx.rotate(f.rot);
+      ctx.fillStyle = 'hsla(352, 80%, ' + f.l + '%, 0.9)';
+      ctx.beginPath();
+      ctx.ellipse(0, 0, f.sz * 0.55, f.sz, 0, 0, TAU);
+      ctx.fill();
+      ctx.restore();
+    });
+    ctx.restore();
+  }
+
+  /* ---------- frame ---------- */
+  function draw(t, dt) {
+    ctx.clearRect(0, 0, W, H);
+    roses.forEach(function (r) {
+      var s = smooth((t - r.delay) / STEM_MS);
+      if (s <= 0.001) return;
+      var p = clamp((t - r.delay - BLOOM_DELAY) / BLOOM_MS);
+      var g = geom(r);
+      drawStem(g, s);
+      drawLeaves(g, s);
+      var tip = pt(g, s), tg = tan(g, s);
+      drawHead(tip[0], tip[1], g.R, p, t, r.seed, Math.atan2(tg[0], -tg[1]));
+    });
+    if (!reduce && t > FALL_START) drawFall(t, dt);
+  }
+
+  function resize() {
+    var dpr = Math.min(window.devicePixelRatio || 1, 2);
+    var rect = cv.getBoundingClientRect();
+    W = rect.width; H = rect.height;
+    cv.width = Math.max(1, Math.round(W * dpr));
+    cv.height = Math.max(1, Math.round(H * dpr));
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    if (reduce) draw(1e6, 0);
+  }
+
+  var t0 = performance.now(), last = t0;
+  function loop(now) {
+    var dt = Math.min(0.05, (now - last) / 1000);
+    last = now;
+    draw(now - t0, dt);
+    requestAnimationFrame(loop);
+  }
+
+  window.addEventListener('resize', resize);
+  resize();
+  initFall();
+  playText();
+  if (!reduce) requestAnimationFrame(loop);
+
+  document.getElementById('replay').addEventListener('click', function () {
+    t0 = performance.now();
+    last = t0;
+    initFall();
+    playText();
+  });
+})();
+</script>
+
+</body></html>
